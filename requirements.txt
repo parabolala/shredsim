@@ -1,0 +1,5 @@
+ipython[notebook]==3.1.0
+nolearn==0.5
+scipy==0.15.1
+networkx==1.9.1
+matplotlib==1.4.3

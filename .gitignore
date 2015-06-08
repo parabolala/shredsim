@@ -1,0 +1,7 @@
+.DS_Store
+shredsim/dataset/gen
+shredsim/dataset/classifiers
+
+*.pyc
+.ipynb_checkpoints/
+
