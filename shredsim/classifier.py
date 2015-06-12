@@ -84,15 +84,6 @@ def train_dbn_classifier(dataset):
     return dbn
 
 
-def train_knn_classifier(dataset):
-    (trainX, testX, trainY, testY) = dataset
-
-    classifier = neighbors.KNeighborsClassifier()
-    classifier.fit(trainX, trainY)
-
-    return classifier
-
-
 def train_rf_classifier(dataset):
     # RF classifier is faster to train, but takes around 2G in pickled state and
     # gives only 0.77 precision.
@@ -116,7 +107,6 @@ def get_classifier(dataset=None, classifier_type='dbn'):
         classifiers = {
             'dbn': train_dbn_classifier,
             'rf': train_rf_classifier,
-            'knn': train_knn_classifier,
         }
 
         if classifier_type in classifiers:
@@ -136,6 +126,44 @@ def get_classifier(dataset=None, classifier_type='dbn'):
         classifier = pickle.load(open(classifier_fname))
 
     return classifier
+
+
+def find_closest_idx(arg):
+    image, all_samples = arg
+    all_distances = [np.linalg.norm(image - sample) for sample in all_samples]
+    closest_idx = np.argmin(all_distances)
+    return closest_idx
+
+
+class DBNNNClassifier(object):
+    def __init__(self, dbn, dataset):
+        self._dbn = dbn
+        self._dataset = dataset
+        self._all_samples, self._all_labels = dataset
+
+    def predict(self, X):
+        dbn_probas = self._dbn.predict_proba(X)
+
+        args = ((x.astype(np.float32), self._all_samples.astype(np.float32)/255.) for x in X)
+        pool = multiprocessing.Pool()
+        nn_predictions_idxs = itertools.imap(find_closest_idx, args)
+
+        res = []
+
+        for dbn_proba, nn_prediction_idx in itertools.izip(dbn_probas, nn_predictions_idxs):
+            dbn_labels = self._dbn.classes_[dbn_proba>0.01]
+
+            nn_prediction = self._all_labels[nn_prediction_idx]
+            print 'dbn labels', dbn_labels, 'nn pred', nn_prediction, 'idx', nn_prediction_idx
+            if nn_prediction in dbn_labels:
+                print 'yes', nn_prediction_idx
+                res.append(nn_prediction)
+            else:
+                print 'no'
+                res.append(self._dbn.classes_[np.argmax(dbn_proba)])
+        pool.close()
+        pool.join()
+        return res
 
 
 def main():

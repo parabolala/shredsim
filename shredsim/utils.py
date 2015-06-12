@@ -99,3 +99,32 @@ def masked_shred(shred, mask):
 def real_distance(key1, key2, edges):
     return 0 if (key1 in edges and key2 in edges[key1]) else 1
 
+def preserve_outermost(image, foreground_mask):
+  """Only leaves foreground image components adjacent to the border.
+
+  Args:
+    image: 2D numpy array with white foreground and black background.
+    foreground_mask: mask with white where the image foreground is.
+
+  Returns:
+    2D array like image but with only foreground components adjacent to
+        "outside" preserved.
+  """
+  # Leave the values [0, 254] to the outside.
+  outside_mask = cv2.threshold(foreground_mask, 254, 255,
+                               cv2.THRESH_BINARY_INV)[1]
+  with_outside = np.maximum(image, outside_mask)
+
+  flood_fill_mask = 255 - dataset.pad_image(with_outside, 1)
+
+  # Some point outside the foreground mask.
+  seed_point = np.argwhere(outside_mask == 255)[0]
+
+  # Unused flood fil value.
+  new_val = 128
+
+  # flood_fill_mask is set to 1, where the flood fill was applied.
+  cv2.floodFill(with_outside, flood_fill_mask, tuple(seed_point[::-1]), new_val)
+
+  return cv2.bitwise_and(
+      image, image, mask=(flood_fill_mask == 1).astype(np.uint8)[1:-1, 1:-1])
