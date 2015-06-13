@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -121,10 +122,14 @@ def _non_empty_windows(image, window_shape=WINDOW_SHAPE):
                 skipped_some = True
 
 
-def main(datadir=DATADIR):
+def main(argv=[], datadir=DATADIR):
     dataset = get_dataset()
 
+    labels_requested = argv[1:] or None
     for label, image in sorted(dataset.items()):
+        if labels_requested is not None and label not in labels_requested:
+            continue
+
         log.info("Generating data for label: %s", label)
 
         gen_dir = os.path.join(datadir, 'gen', label)
@@ -147,5 +152,5 @@ def main(datadir=DATADIR):
 
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
 
