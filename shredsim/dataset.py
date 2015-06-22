@@ -114,7 +114,10 @@ def _non_empty_windows(image, window_shape=WINDOW_SHAPE):
     for i, j in _all_window_coords(image, window_shape):
         idx = to_slice((i,j), window_shape)
         window = image[idx]
-        if not np.all(window == 0):
+
+        # More than 1% filled.
+        num_non_zeros = np.count_nonzero(window)
+        if (float(num_non_zeros) / window.size) > 0.01:
             yield window
         else:
             if not skipped_some:
@@ -144,10 +147,14 @@ def main(argv=[], datadir=DATADIR):
                     cleaning = True
                 os.unlink(os.path.join(gen_dir, existing))
 
+        i = -1
         for i, w in enumerate(_non_empty_windows(pad_image(image,
-                                                 WINDOW_SIDE * 0.75))):
+                                                           WINDOW_SIDE * 0.5))):
             fname = os.path.join(gen_dir, "%d.png" % i)
             cv2.imwrite(fname, w)
+        if i == -1:
+            logging.error("No good images found for label %s", label)
+            sys.exit(1)
         log.info("Wrote %d images for label: %s", i, label)
 
 
