@@ -24,8 +24,13 @@ Create a virtualenv, activate. e.g. using virtualenvwrapper:
 
 Install the dependencies:
 
-    pip install -r requirements.txt
-    # Next install OpenCV+python in your favorite way.
+    # Install OpenCV+python in your favorite way.
+    # e.g. sudo port install opencv +debug+python27+tbb 
+    # or   sudo apt-get install python-opencv
+
+    # Next install all the deps and the package itself.
+    pip install .
+
 
 Generate the training dataset:
 
@@ -35,8 +40,20 @@ Train the Deep Belief Network classifier:
 
     make classifier
 
+Or a LSH one:
+
+    make classifier-lsh
+
+
 Explore the results in an IPython notebook:
 
     ipython notebook Main.ipynb
+
+Optional components
+---
+
+`cudamat` speeds up DBN training.
+
+`opencv` with TBB support helps OpenCV MLP ANN.
 
 [unshred-tag]: https://github.com/dchaplinsky/unshred-tag
