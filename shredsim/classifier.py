@@ -1,19 +1,22 @@
-import cPickle as pickle
 import itertools
 import logging
 import multiprocessing
 import os
 import re
+import sys
 import time
 
 import cv2
 import numpy as np
 
-from nolearn.dbn import DBN
 from sklearn.cross_validation import train_test_split
-from sklearn import ensemble
-from sklearn import neighbors
 from sklearn.metrics import classification_report
+
+from classifiers import dbn
+from classifiers import nn
+from classifiers import lsh
+from classifiers import opencv_knn
+from classifiers import opencv_ann
 
 import dataset
 
@@ -22,6 +25,9 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
+DEFAULT_CLASSIFIER_TYPE = 'dbn'
+
+_DATASET = None
 _CLASSIFIER_FNAME_TMPL = os.path.join(dataset.DATADIR, 'classifiers', '%s.dat')
 
 
@@ -43,139 +49,105 @@ def _load_dataset_for_label(label):
     for sample_fname in os.listdir(os.path.join(dataset.DATADIR, 'gen', label)):
         path = os.path.join(dataset.DATADIR, 'gen', label, sample_fname)
         samples.append(cv2.cvtColor(cv2.imread(path),
-                                    cv2.cv.CV_BGR2GRAY).reshape((1,2500)))
+                                    cv2.cv.CV_BGR2GRAY).reshape(
+                                        (1,2500)).astype(np.float32))
     return samples
 
 def get_dataset():
-    with Profile("Loading the dataset."):
-        labels = []
+    global _DATASET
+    if _DATASET is None:
+        with Profile("Loading the dataset."):
+            labels = []
 
-        for src_fname in os.listdir(os.path.join(dataset.DATADIR, 'src')):
-            label, ext = os.path.splitext(src_fname)
-            if ext != '.png': continue
-            labels.append(label)
+            for src_fname in os.listdir(os.path.join(dataset.DATADIR, 'src')):
+                label, ext = os.path.splitext(src_fname)
+                if ext != '.png': continue
+                labels.append(label)
 
-        samples = []
-        labels_for_samples = []
+            samples = []
+            labels_for_samples = []
 
-        p = multiprocessing.Pool()
-        for samples_for_label, label in itertools.izip(
-                p.imap(_load_dataset_for_label, labels),
-                labels):
-            samples.extend(samples_for_label)
-            labels_for_samples.extend([label] * len(samples_for_label))
-        p.close()
-        p.join()
+            p = multiprocessing.Pool()
+            for samples_for_label, label in itertools.izip(
+                    p.imap(_load_dataset_for_label, labels),
+                    labels):
+                samples.extend(samples_for_label)
+                labels_for_samples.extend([label] * len(samples_for_label))
+            p.close()
+            p.join()
 
-        log.info("Loaded %d samples.", len(samples))
-        return np.concatenate(samples, axis=0), np.array(labels_for_samples)
-
-
-def train_dbn_classifier(dataset):
-    (trainX, testX, trainY, testY) = dataset
-    dbn = DBN(
-        [trainX.shape[1], 300, len(set(trainY) | set(testY))],
-        learn_rates = 0.4,
-        learn_rate_decays = 0.9,
-        epochs = 50,
-        verbose = 1)
-    dbn.fit(trainX, trainY)
-
-    return dbn
-
-
-def train_rf_classifier(dataset):
-    # RF classifier is faster to train, but takes around 2G in pickled state and
-    # gives only 0.77 precision.
-    (trainX, testX, trainY, testY) = dataset
-    classifier = ensemble.RandomForestClassifier(n_jobs=-1)
-    classifier.fit(trainX, trainY)
-    return classifier
-
+            log.info("Loaded %d samples.", len(samples))
+            _DATASET = np.concatenate(samples, axis=0), np.array(labels_for_samples)
+    return _DATASET
 
 def get_classifier(dataset=None, classifier_type='dbn'):
-    assert re.match('^[-a-z]+$', classifier_type)
+    """
+
+    Args:
+        dataset: optional dataset to use for training/loading. If given, must be
+            a 4-tuple: (trainX, testX, trainY, testY).
+        classifier_type: string classifier type.
+
+    Returns:
+        A classifiers.ClassifierBase instance.
+    """
+    assert re.match('^[-a-z_]+$', classifier_type)
+
+    classifiers = {
+        'dbn': dbn.DBNClassifer,
+        'nn': nn.NNClassifier,
+        'lsh': lsh.LSHClassifer,
+        'opencv_knn': opencv_knn.OpenCVKNNClassifier,
+        'opencv_ann': opencv_ann.OpenCVANNClassifier,
+    }
+
+    classifier = classifiers[classifier_type]()
 
     classifier_fname = _CLASSIFIER_FNAME_TMPL % classifier_type
+
+    if dataset is None:
+        samples, labels = get_dataset()
+        samples[0] /= 255
+        dataset = trainX, testX, trainY, testY = train_test_split(
+                samples, labels, test_size=0.03)
+    else:
+        trainX, testX, trainY, testY = dataset
+        samples = np.concatenate([trainX, testX], axis=0)
+        labels = np.concatenate([trainY, testY], axis=0)
+
     if not os.path.exists(classifier_fname):
-        if dataset is None:
-            samples, labels = get_dataset()
-            dataset = train_test_split(samples / 255.0, labels, test_size = 0.33)
-
-        log.info("Classifier type %s not found. Training one.", classifier_type)
-
-        classifiers = {
-            'dbn': train_dbn_classifier,
-            'rf': train_rf_classifier,
-        }
-
-        if classifier_type in classifiers:
-            classifier = classifiers[classifier_type](dataset)
-        else:
-            raise NotImplementedError("Unknown classifier type: %s" %
-                                      classifier_type)
+        with Profile("Classifier type %s not found. Training one." % classifier_type):
+            classifier.train((samples, labels))
 
         classifier_dir = os.path.dirname(classifier_fname)
         log.info("Training done. Saving.")
         if not os.path.exists(classifier_dir):
             os.makedirs(classifier_dir)
 
-        pickle.dump(classifier, open(classifier_fname, 'w'))
+        #classifier.save(classifier_fname)
+        log.info("Saved")
     else:
         log.info("Found existing classifier. Loading.")
-        classifier = pickle.load(open(classifier_fname))
+        classifier = classifier.load(classifier_fname, dataset)
 
     return classifier
 
 
-def find_closest_idx(arg):
-    image, all_samples = arg
-    all_distances = [np.linalg.norm(image - sample) for sample in all_samples]
-    closest_idx = np.argmin(all_distances)
-    return closest_idx
-
-
-class DBNNNClassifier(object):
-    def __init__(self, dbn, dataset):
-        self._dbn = dbn
-        self._dataset = dataset
-        self._all_samples, self._all_labels = dataset
-
-    def predict(self, X):
-        dbn_probas = self._dbn.predict_proba(X)
-
-        args = ((x.astype(np.float32), self._all_samples.astype(np.float32)/255.) for x in X)
-        pool = multiprocessing.Pool()
-        nn_predictions_idxs = itertools.imap(find_closest_idx, args)
-
-        res = []
-
-        for dbn_proba, nn_prediction_idx in itertools.izip(dbn_probas, nn_predictions_idxs):
-            dbn_labels = self._dbn.classes_[dbn_proba>0.01]
-
-            nn_prediction = self._all_labels[nn_prediction_idx]
-            print 'dbn labels', dbn_labels, 'nn pred', nn_prediction, 'idx', nn_prediction_idx
-            if nn_prediction in dbn_labels:
-                print 'yes', nn_prediction_idx
-                res.append(nn_prediction)
-            else:
-                print 'no'
-                res.append(self._dbn.classes_[np.argmax(dbn_proba)])
-        pool.close()
-        pool.join()
-        return res
-
-
-def main():
+def main(argv):
     samples, labels = get_dataset()
 
     with Profile("Splitting data"):
         dataset = (trainX, testX, trainY, testY) = train_test_split(
             samples / 255.0, labels, test_size = 0.33)
 
-    classifier = get_classifier(dataset, 'dbn')
+    classifier_type = DEFAULT_CLASSIFIER_TYPE
+    if len(argv) > 1:
+        classifier_type = argv[1]
 
-    preds = classifier.predict(testX)
+    classifier = get_classifier(dataset, classifier_type)
+
+    with Profile("Getting test predictions for %d samples." % testX.shape[0]):
+      preds = classifier.predict(testX)
     print classification_report(testY, preds)
 
     #for i in np.random.choice(np.arange(0, len(testY)), size = (10,)):
@@ -193,4 +165,4 @@ def main():
 
     #import ipdb;ipdb.set_trace()
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
